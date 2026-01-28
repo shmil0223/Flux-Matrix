@@ -1,0 +1,5 @@
+{
+  "name": "Smart Problem Box",
+  "description": "A maintainable educational web app with a Notion-style problem bank, study modes, and immediate feedback.",
+  "requestFramePermissions": []
+}
