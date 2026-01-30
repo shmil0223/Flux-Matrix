@@ -1326,12 +1326,46 @@ app.post('/api/analysis', async (req, res) => {
 
   const content = aiResult.data?.choices?.[0]?.message?.content || '';
 
-  let parsed;
-  try {
-    const parsedJson = parseJsonFromContent(content);
-    if (!parsedJson) throw new Error('invalid_json');
-    parsed = AnalysisResultSchema.parse(parsedJson);
-  } catch (error) {
+  const parseAnalysisResult = (rawContent) => {
+    const parsedJson = parseJsonFromContent(rawContent || '');
+    if (!parsedJson) return null;
+    try {
+      return AnalysisResultSchema.parse(parsedJson);
+    } catch {
+      return null;
+    }
+  };
+
+  let parsed = parseAnalysisResult(content);
+
+  if (!parsed) {
+    const retryPrompt = [
+      ANALYSIS_SYSTEM_PROMPT,
+      '',
+      '补充要求：',
+      '1) 只输出 JSON，不要代码块，不要解释文字。',
+      '2) 字段必须完整且与模板一致。',
+      '3) 所有字段必须是字符串，不能为空。',
+      '4) 如果无法完成，也必须返回完整 JSON，用简短中文填充。'
+    ].join('\n');
+
+    const retryResult = await callChatCompletions({
+      model: usedModel,
+      messages: [
+        { role: 'system', content: retryPrompt },
+        { role: 'user', content: questionText }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.0
+    });
+
+    if (retryResult.ok) {
+      const retryContent = retryResult.data?.choices?.[0]?.message?.content || '';
+      parsed = parseAnalysisResult(retryContent);
+    }
+  }
+
+  if (!parsed) {
     return res.status(400).json({ message: `模型返回格式不符合预期（${usedModel}）` });
   }
 

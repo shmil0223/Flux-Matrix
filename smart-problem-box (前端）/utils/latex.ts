@@ -161,7 +161,8 @@ export const preprocessLaTeX = (value: string) => {
   text = mathChunks
     .map((chunk) => {
       if (chunk.startsWith('$$') || chunk.startsWith('$')) return chunk;
-      return wrapMathRuns(chunk);
+      const withTextWrapped = chunk.replace(/\\text\s*\{[^}]*\}/g, (match) => `$${match}$`);
+      return wrapMathRuns(withTextWrapped);
     })
     .join('');
 
