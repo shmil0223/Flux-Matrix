@@ -649,9 +649,29 @@ app.delete('/api/nodes/:id', async (req, res) => {
 
   const trash = await ensureTrashFolder(user.id);
   const nodeId = req.params.id;
+  
+  // 先查询节点
+  const { data: existingNode } = await supabaseAdmin
+    .from('tree_nodes')
+    .select('*')
+    .eq('id', nodeId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  
+  if (!existingNode) {
+    return res.status(400).json({ message: '节点不存在' });
+  }
+  
+  // 为避免唯一约束冲突，给节点名称添加时间戳后缀
+  const timestamp = Date.now();
+  const newTitle = `${existingNode.title}_deleted_${timestamp}`;
+  
   const { error } = await supabaseAdmin
     .from('tree_nodes')
-    .update({ parent_id: trash.id })
+    .update({ 
+      parent_id: trash.id,
+      title: newTitle
+    })
     .eq('id', nodeId)
     .eq('user_id', user.id);
 
@@ -667,13 +687,47 @@ app.post('/api/nodes/batch-delete', async (req, res) => {
   if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
     return res.status(400).json({ message: '缺少节点' });
   }
+  
   const trash = await ensureTrashFolder(user.id);
-  const { error } = await supabaseAdmin
-    .from('tree_nodes')
-    .update({ parent_id: trash.id })
-    .in('id', nodeIds)
-    .eq('user_id', user.id);
-  if (error) return res.status(400).json({ message: error.message });
+  const timestamp = Date.now();
+  let successCount = 0;
+  let errorMessages = [];
+  
+  for (let i = 0; i < nodeIds.length; i++) {
+    const nodeId = nodeIds[i];
+    
+    const { data: existingNode } = await supabaseAdmin
+      .from('tree_nodes')
+      .select('*')
+      .eq('id', nodeId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    
+    if (!existingNode) continue;
+    
+    // 重命名以避免唯一约束冲突
+    const newTitle = `${existingNode.title}_deleted_${timestamp}_${i}`;
+    
+    const { error } = await supabaseAdmin
+      .from('tree_nodes')
+      .update({ 
+        parent_id: trash.id,
+        title: newTitle
+      })
+      .eq('id', nodeId)
+      .eq('user_id', user.id);
+    
+    if (error) {
+      errorMessages.push(error.message);
+    } else {
+      successCount++;
+    }
+  }
+  
+  if (errorMessages.length > 0 && successCount === 0) {
+    return res.status(400).json({ message: errorMessages[0] });
+  }
+  
   res.json({ ok: true });
 });
 
@@ -684,12 +738,50 @@ app.post('/api/nodes/restore', async (req, res) => {
   const { nodeId } = req.body || {};
   if (!nodeId) return res.status(400).json({ message: '缺少节点' });
 
-  await supabaseAdmin
+  // 查询节点当前信息
+  const { data: existingNode } = await supabaseAdmin
     .from('tree_nodes')
-    .update({ parent_id: null })
+    .select('*')
+    .eq('id', nodeId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  
+  if (!existingNode) {
+    return res.status(400).json({ message: '节点不存在' });
+  }
+  
+  // 尝试恢复原名（去掉 _deleted_xxx 后缀）
+  let restoredTitle = existingNode.title;
+  const deletedSuffixMatch = restoredTitle.match(/^(.+)_deleted_\d+(_\d+)?$/);
+  if (deletedSuffixMatch) {
+    restoredTitle = deletedSuffixMatch[1];
+  }
+  
+  // 检查根目录是否已有同名节点
+  const { data: conflictNode } = await supabaseAdmin
+    .from('tree_nodes')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('title', restoredTitle)
+    .is('parent_id', null)
+    .neq('id', nodeId)
+    .maybeSingle();
+  
+  // 如果有冲突，添加时间戳后缀
+  if (conflictNode) {
+    restoredTitle = `${restoredTitle}_restored_${Date.now()}`;
+  }
+  
+  const { error } = await supabaseAdmin
+    .from('tree_nodes')
+    .update({ 
+      parent_id: null,
+      title: restoredTitle
+    })
     .eq('id', nodeId)
     .eq('user_id', user.id);
 
+  if (error) return res.status(400).json({ message: error.message });
   res.json({ ok: true });
 });
 
@@ -1130,9 +1222,10 @@ app.post('/api/import/analyze', async (req, res) => {
       if (Array.isArray(parsed)) {
         rawCandidates = parsed;
       } else if (parsed && typeof parsed === 'object') {
-        if (parsed.handwritten === true) {
-          return res.status(400).json({ message: parsed.reason || '检测到手写题目，已跳过识别' });
-        }
+        // 已移除手写检测拦截，允许包含手写内容的图片继续识别
+        // if (parsed.handwritten === true) {
+        //   return res.status(400).json({ message: parsed.reason || '检测到手写题目，已跳过识别' });
+        // }
         if (Array.isArray(parsed.items)) rawCandidates = parsed.items;
         else if (Array.isArray(parsed.questions)) rawCandidates = parsed.questions;
         else if (Array.isArray(parsed.data)) rawCandidates = parsed.data;
@@ -1218,9 +1311,10 @@ app.post('/api/import/analyze', async (req, res) => {
         : '');
     const retryParsed = parseJsonFromContent(retryContent || '');
     if (retryParsed && !Array.isArray(retryParsed)) {
-      if (retryParsed.handwritten === true) {
-        return res.status(400).json({ message: retryParsed.reason || '检测到手写题目，已跳过识别' });
-      }
+      // 已移除手写检测拦截，允许包含手写内容的图片继续识别
+      // if (retryParsed.handwritten === true) {
+      //   return res.status(400).json({ message: retryParsed.reason || '检测到手写题目，已跳过识别' });
+      // }
       const items = Array.isArray(retryParsed.items) ? retryParsed.items : [];
       if (items.length > 0) {
         candidates = items.map((item) => {

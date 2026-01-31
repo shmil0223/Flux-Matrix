@@ -410,29 +410,38 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setTreeData(prev => pruneTreeByProblemIds(prev, idSet));
   };
 
-  const deleteNode = (nodeId: string) => {
+  const deleteNode = async (nodeId: string) => {
+    // 先进行乐观更新
     setTreeData((prev) => {
       const trashId = findTrashFolderId(prev);
       return moveNodeInTree(prev, nodeId, trashId);
     });
-    apiDeleteNode(nodeId)
-      .catch((error) => {
-        refreshData();
-        console.error('删除节点失败：', error);
-      });
+    
+    try {
+      await apiDeleteNode(nodeId);
+      await refreshData();
+    } catch (error) {
+      await refreshData();
+      console.error('删除节点失败：', error);
+    }
   };
 
-  const deleteNodesBatch = (nodeIds: string[]) => {
+  const deleteNodesBatch = async (nodeIds: string[]) => {
     if (nodeIds.length === 0) return;
+    
+    // 先进行乐观更新
     setTreeData((prev) => {
       const trashId = findTrashFolderId(prev);
       return nodeIds.reduce((acc, id) => moveNodeInTree(acc, id, trashId), prev);
     });
-    apiDeleteNodesBatch(nodeIds)
-      .catch((error) => {
-        refreshData();
-        console.error('批量删除节点失败：', error);
-      });
+    
+    try {
+      await apiDeleteNodesBatch(nodeIds);
+      await refreshData();
+    } catch (error) {
+      await refreshData();
+      console.error('批量删除节点失败：', error);
+    }
   };
 
   const deleteProblem = (problemId: string) => {
